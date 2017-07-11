@@ -232,7 +232,11 @@ static unsigned thread_main(thread_data_t* data) {
 
   int start = lock.load(std::memory_order_relaxed);
   int current = start;
-  while (!lock.compare_exchange_strong(current, current + 1, std::memory_order_acquire)) {
+  while (current & 1 == 1) {
+    current = lock.load(std::memory_order_relaxed);
+  }
+
+  while (!lock.compare_exchange_strong(current, current + 1, std::memory_order_acq_rel)) {
     do {
       current = lock.load(std::memory_order_relaxed);
     } while (current & 1 == 1);
@@ -245,4 +249,4 @@ static unsigned thread_main(thread_data_t* data) {
   }
 
   lock.store(current + 2, std::memory_order_release);
-}
+}                                                                                     	
