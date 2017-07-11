@@ -28,7 +28,7 @@ uint64_t get_time_ns();
  * Convenience function for delaying thread for time interval
  * that is specified in milliseconds.
  */
-bool sleep(uint64_t msec);
+bool sleep_ms(uint64_t msec);
 
 #define MILLISECONDS_IN_SECOND 1000
 #define NANOSECONDS_IN_MILLISECOND 1000000
