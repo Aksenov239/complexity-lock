@@ -188,11 +188,8 @@ static void parse_cmd_line_args(cmd_line_args_t &args, int argc, char **argv) {
   
   // print values
   std::cout << "Using parameters:\n" <<
-  "\tthread count       = " << args.threads_count << "\n" <<
-  "\ttime count         = " << args.time << "\n" <<
-  "\tparallel work      = " << args.parallel_work << "\n" <<
-  "\tcritical work      = " << args.critical_work << "\n";
-
+  "\tthread count         = " << args.threads_count << "\n" <<
+  "\ttime count         = " << args.time << "\n";
 }
 
 unsigned greedy_pin(unsigned tid) {

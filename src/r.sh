@@ -1,0 +1,1 @@
+g++ -std=gnu++11 -O2 -lpthread -DLINUXOS -I ~/complexity-lock/src/common/ locking_scheme.cpp -o locking_scheme
