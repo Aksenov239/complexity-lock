@@ -45,6 +45,7 @@ struct cmd_line_args_t {
   std::string pin_type;
   unsigned parallel_work;
   unsigned critical_work;
+  std::string lock_type;
 };
 
 struct thread_data_t {
@@ -61,7 +62,8 @@ struct thread_data_t {
 static void print_usage();
 static void parse_cmd_line_args(cmd_line_args_t &args, int argc, char** argv);
 static void* thread_fun(void* data);
-static unsigned thread_main(thread_data_t* data );
+static unsigned thread_main_simple(thread_data_t* data );
+static unsigned thread_main_ticket(thread_data_t* data );
 
 void pin(pid_t t, int cpu);
 
@@ -74,6 +76,7 @@ unsigned uneven_pin(unsigned tid);
 static cmd_line_args_t args;
 
 std::atomic<int> lock;
+std::atomic<int> ticket;
 unsigned TIME;
 bool ZERO = false;
 
@@ -81,6 +84,8 @@ int main(int argc, char **argv) {
   args.pin_type = 1;
 
   lock = 0;
+
+  ticket = 0;
 
   parse_cmd_line_args(args, argc, argv);
 
@@ -172,6 +177,7 @@ static void parse_cmd_line_args(cmd_line_args_t &args, int argc, char **argv) {
   args.pin_type = deepsea::cmdline::parse_or_default_string("pin", "greedy");
   args.critical_work = deepsea::cmdline::parse_or_default_int("critical", 1000);
   args.parallel_work = deepsea::cmdline::parse_or_default_int("parallel", 1000);
+  args.lock_type = deepsea::cmdline::parse_or_default_string("lock", "simple");
   
   // some argument checking, but not very extensive
   
@@ -217,15 +223,22 @@ static void* thread_fun(void* data) {
   
   thread_data_t* thread_data = (thread_data_t*) data;
 
-  while (!thread_data->finish.load(std::memory_order_relaxed)) {
-    thread_data->iterations++;
-    thread_main(thread_data);
+  if (args.lock_type == "simple") {
+    while (!thread_data->finish.load(std::memory_order_relaxed)) {
+      thread_data->iterations++;
+      thread_main_simple(thread_data);
+    }
+  } else if (args.lock_type == "ticket") {
+    while (!thread_data->finish.load(std::memory_order_relaxed)) {
+      thread_data->iterations++;
+      thread_main_ticket(thread_data);
+    }
   }
   
   return NULL;
 }
 
-static unsigned thread_main(thread_data_t* data) {
+static unsigned thread_main_simple(thread_data_t* data) {
   for (int i = 0; i < args.parallel_work; i++) {
     NOP;
   }
@@ -249,4 +262,23 @@ static unsigned thread_main(thread_data_t* data) {
   }
 
   lock.store(current + 2, std::memory_order_release);
-}                                                                                     	
+}
+
+static unsigned thread_main_ticket(thread_data_t* data) {
+  for (int i = 0; i < args.parallel_work; i++) {
+    NOP;
+  }
+
+  int start = ticket.fetch_add(1, std::memory_order_relaxed);
+  int current = lock.load(std::memory_order_relaxed);
+  data->tries = start - current + 1;
+
+  do {
+  } while (lock.load(std::memory_order_acquire) != start);
+
+  for (int i = 0; i < args.critical_work; i++) {
+    NOP;
+  }
+
+  lock.fetch_add(1, std::memory_order_release);
+}
