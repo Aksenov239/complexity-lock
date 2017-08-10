@@ -45,24 +45,25 @@ struct cmd_line_args_t {
   std::string pin_type;
   unsigned parallel_work;
   unsigned critical_work;
+  std::string lock_type;
 };
 
 struct thread_data_t {
   unsigned tid;
   
-  unsigned long tries;
+  unsigned long queue;
   unsigned long iterations;
 
-  uint64_t long acquire;
-  uint64_t long release;
-
   unsigned total;
+
+  std::atomic<bool> finish;
 };
 
 static void print_usage();
 static void parse_cmd_line_args(cmd_line_args_t &args, int argc, char** argv);
 static void* thread_fun(void* data);
-static unsigned thread_main(thread_data_t* data );
+static unsigned thread_main_simple(thread_data_t* data );
+static unsigned thread_main_ticket(thread_data_t* data );
 
 void pin(pid_t t, int cpu);
 
@@ -74,7 +75,8 @@ unsigned uneven_pin(unsigned tid);
 
 static cmd_line_args_t args;
 
-std::atomic<bool> lock;
+std::atomic<int> lock;
+std::atomic<int> ticket;
 unsigned TIME;
 bool ZERO = false;
 
@@ -82,6 +84,8 @@ int main(int argc, char **argv) {
   args.pin_type = 1;
 
   lock = 0;
+
+  ticket = 0;
 
   parse_cmd_line_args(args, argc, argv);
 
@@ -92,43 +96,41 @@ int main(int argc, char **argv) {
     
     td->tid = i;
 
-    td->tries = 0;
+    td->queue = 0;
     td->iterations = 0;
 
     thread_data[i] = td;
   }
 
-  pthread_t* threads = (pthread_t*) cache_size_aligned_alloc(sizeof(pthread_t) * args.threads_count - 1);
+  pthread_t* threads = (pthread_t*) cache_size_aligned_alloc(sizeof(pthread_t) * args.threads_count);
 
-  for (unsigned i = 0; i < args.threads_count - 1; i++) {
-    if (pthread_create(threads + i, NULL, thread_fun, (void*) thread_data[i + 1])) {
+  for (unsigned i = 0; i < args.threads_count; i++) {
+    if (pthread_create(threads + i, NULL, thread_fun, (void*) thread_data[i])) {
       std::cerr << "Cannot create required threads. Exiting." << std::endl;
       exit(1);
     }
   }
 
-  thread_fun((void*) thread_data[0]);
+  sleep_ms(TIME);
 
-  for (unsigned i = 0; i < args.threads_count - 1; i++) {
+  for (unsigned i = 0; i < args.threads_count; i++) {
+    thread_data[i]->finish.store(true);
+  }
+
+  for (unsigned i = 0; i < args.threads_count; i++) {
     pthread_join(threads[i], NULL);
   }
 
   unsigned long total_iterations = 0;
-  unsigned long total_tries = 0;
-  uint64_t total_acquire = 0;
-  uint64_t total_release = 0;
+  unsigned long total_queue = 0;
 
   for (int i = 0; i < args.threads_count; i++) {
     total_iterations += thread_data[i]->iterations;
-    total_tries += thread_data[i]->tries;
-    total_acquire += thread_data[i]->acquire;
-    total_release += thread_data[i]->release;
+    total_queue += thread_data[i]->queue;
   }
 
-  printf("Total throughput: %f op/sec\n", 1. * total_iterations / TIME);
-  printf("Average tries: %f\n", 1. * total_tries / total_iterations);
-  printf("Average time to acquire %f\n", 1. * total_acquire / total_iterations);
-  printf("Average time to release %f\n", 1. * total_release / total_iterations);
+  printf("Throughput: %f op/sec\n", 1. * total_iterations / TIME);
+  printf("Average queue: %f\n", 1. * total_queue / total_iterations);
 
   for (int i = 0; i < args.threads_count; i++) {
     cache_aligned_free(thread_data[i]);
@@ -159,10 +161,10 @@ void pin(pid_t t, int cpu) {
   if (s != 0) {
 	printf("error\n" );
   } else {
-    printf("Set for %d:\n", t);
+/*    printf("Set for %d:\n", t);
     for (j = 0; j < CPU_SETSIZE; j++)
       if (CPU_ISSET(j, &cpuset))
-        printf("    CPU %d\n", j);
+        printf("    CPU %d\n", j);*/
   }
 }
 
@@ -175,6 +177,7 @@ static void parse_cmd_line_args(cmd_line_args_t &args, int argc, char **argv) {
   args.pin_type = deepsea::cmdline::parse_or_default_string("pin", "greedy");
   args.critical_work = deepsea::cmdline::parse_or_default_int("critical", 1000);
   args.parallel_work = deepsea::cmdline::parse_or_default_int("parallel", 1000);
+  args.lock_type = deepsea::cmdline::parse_or_default_string("lock", "simple");
   
   // some argument checking, but not very extensive
   
@@ -191,20 +194,22 @@ static void parse_cmd_line_args(cmd_line_args_t &args, int argc, char **argv) {
   
   // print values
   std::cout << "Using parameters:\n" <<
-  "\tthread count         = " << args.threads_count << "\n" <<
-  "\ttime count         = " << args.time << "\n";
+  "\tthread count       = " << args.threads_count << "\n" <<
+  "\ttime count         = " << args.time << "\n" <<
+  "\tcritical           = " << args.critical_work << "\n" <<
+  "\tparallel           = " << args.parallel_work << "\n";
 }
 
 unsigned greedy_pin(unsigned tid) {
   unsigned target = tid;
-  printf("thread %d to %d\n", tid, target);
+//  printf("thread %d to %d\n", tid, target);
   return target;
 }
 
 unsigned socket_pin(unsigned tid) {
   unsigned cores = MAX_THREADS / PER_CORE;
   unsigned target = (tid % cores) * PER_CORE + tid / cores;
-  printf("thread %d to %d\n", tid, target);
+//  printf("thread %d to %d\n", tid, target);
   return target;
 }
 
@@ -220,33 +225,62 @@ static void* thread_fun(void* data) {
   
   thread_data_t* thread_data = (thread_data_t*) data;
 
-  uint64_t start_time = get_time_ms();
-  while (get_time_ms() - start_time < TIME) {
-    thread_data->iterations++;
-    thread_main(thread_data);
+  if (args.lock_type == "simple") {
+    while (!thread_data->finish.load(std::memory_order_relaxed)) {
+      thread_data->iterations++;
+      thread_main_simple(thread_data);
+    }
+  } else if (args.lock_type == "ticket") {
+    while (!thread_data->finish.load(std::memory_order_relaxed)) {
+      thread_data->iterations++;
+      thread_main_ticket(thread_data);
+    }
   }
   
   return NULL;
 }
 
-static unsigned thread_main(thread_data_t* data) {
+static unsigned thread_main_simple(thread_data_t* data) {
   for (int i = 0; i < args.parallel_work; i++) {
     NOP;
   }
 
-  uint64_t start_time = get_time_ns();
-  do {
-    data->tries++;
-    while (lock.load(std::memory_order_relaxed)) {}
-  } while (!lock.compare_exchange_weak(ZERO, true, std::memory_order_acq_rel));
+  int start = lock.load(std::memory_order_relaxed);
+  int current = start;
+  while (current & 1 == 1) {
+    current = lock.load(std::memory_order_relaxed);
+  }
 
-  data->acquire += get_time_ns() - start_time;
+  while (!lock.compare_exchange_strong(current, current + 1, std::memory_order_acq_rel)) {
+    do {
+      current = lock.load(std::memory_order_relaxed);
+    } while (current & 1 == 1);
+  }
+  
+  data->queue += current / 2 - start / 2 + 1;
 
   for (int i = 0; i < args.critical_work; i++) {
     NOP;
   }
 
-  start_time = get_time_ns();
-  lock.store(false, std::memory_order_release);
-  data->release += get_time_ns() - start_time;
+  lock.store(current + 2, std::memory_order_release);
+}
+
+static unsigned thread_main_ticket(thread_data_t* data) {
+  for (int i = 0; i < args.parallel_work; i++) {
+    NOP;
+  }
+
+  int start = ticket.fetch_add(1, std::memory_order_relaxed);
+  int current = lock.load(std::memory_order_relaxed);
+  data->queue += start - current + 1;
+
+  do {
+  } while (lock.load(std::memory_order_acquire) != start);
+
+  for (int i = 0; i < args.critical_work; i++) {
+    NOP;
+  }
+
+  lock.fetch_add(1, std::memory_order_release);
 }
