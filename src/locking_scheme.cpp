@@ -271,7 +271,7 @@ static unsigned thread_main_ticket(thread_data_t* data) {
 
   int start = ticket.fetch_add(1, std::memory_order_relaxed);
   int current = lock.load(std::memory_order_relaxed);
-  data->tries = start - current + 1;
+  data->tries += start - current + 1;
 
   do {
   } while (lock.load(std::memory_order_acquire) != start);
