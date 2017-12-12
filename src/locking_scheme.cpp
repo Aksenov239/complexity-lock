@@ -37,7 +37,8 @@ _x; })
 
 #define CAS(m, c, s) __CAS64((m),(c),(s))
 
-#define NOP __asm__ __volatile__("")
+//#define NOP __asm__ __volatile__("")
+#define NOP __asm__("")
 
 struct cmd_line_args_t {
   unsigned time;
@@ -79,10 +80,12 @@ static cmd_line_args_t args;
 std::atomic<int> lock;
 std::atomic<int> ticket;
 unsigned TIME;
-int ZERO = 0;
+int ZERO;
 
 int main(int argc, char **argv) {
   args.pin_type = "greedy";
+
+  ZERO = 0;
 
   lock = 0;
 
@@ -99,6 +102,8 @@ int main(int argc, char **argv) {
 
     td->queue = 0;
     td->iterations = 0;
+
+    td->finish = false;
 
     thread_data[i] = td;
   }
@@ -129,6 +134,8 @@ int main(int argc, char **argv) {
     total_iterations += thread_data[i]->iterations;
     total_queue += thread_data[i]->queue;
   }
+
+  std::cerr << total_iterations << " " << TIME << std::endl;
 
   printf("Throughput: %f op/sec\n", 1. * total_iterations / TIME);
   printf("Average queue: %f\n", 1. * total_queue / total_iterations);
@@ -216,6 +223,7 @@ unsigned socket_pin(unsigned tid) {
 
 static void* thread_fun(void* data) {
   if (args.pin_type == "greedy") {
+//      std::cerr << "greedy\n";
       pin(((thread_data_t *)data)->tid, greedy_pin(((thread_data_t *) data)->tid));
   } else if (args.pin_type == "socket") {
       pin(((thread_data_t *)data)->tid, socket_pin(((thread_data_t *) data)->tid));
@@ -224,7 +232,7 @@ static void* thread_fun(void* data) {
       exit(0);
   }
   
-  thread_data_t* thread_data = (thread_data_t*) data;
+  thread_data_t* thread_data = (thread_data_t*) data; 
 
   auto main_fun = thread_main_simple;
   if (args.lock_type == "simple") {
@@ -251,7 +259,9 @@ static void thread_main_simple(thread_data_t* data) {
     NOP;
   }
 
-  while (!lock.compare_exchange_strong(ZERO, 1, std::memory_order_acq_rel)) { }
+  int zero = 0;
+  while (!lock.compare_exchange_strong(zero, 1, std::memory_order_acq_rel)) { }
+  if (lock.load() != 1) std::cerr << lock.load() << " " << zero <<  " WTF?!\n";
 
   for (int i = 0; i < args.critical_work; i++) {
     NOP;
