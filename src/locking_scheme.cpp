@@ -260,8 +260,9 @@ static void thread_main_simple(thread_data_t* data) {
   }
 
   int zero = 0;
-  while (!lock.compare_exchange_strong(zero, 1, std::memory_order_acq_rel)) { }
-  if (lock.load() != 1) std::cerr << lock.load() << " " << zero <<  " WTF?!\n";
+  while (!lock.compare_exchange_strong(zero, 1, std::memory_order_acq_rel)) {
+      zero = 0;
+  }
 
   for (int i = 0; i < args.critical_work; i++) {
     NOP;
