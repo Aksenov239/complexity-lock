@@ -120,12 +120,14 @@ int main(int argc, char **argv) {
   sleep_ms(TIME);
 
   for (unsigned i = 0; i < args.threads_count; i++) {
-    thread_data[i]->finish.store(true);
+    thread_data[i]->finish.store(true, std::memory_order_relaxed);
   }
 
   for (unsigned i = 0; i < args.threads_count; i++) {
     pthread_join(threads[i], NULL);
   }
+
+  std::atomic_thread_fence(std::memory_order_acquire);
 
   unsigned long total_iterations = 0;
   unsigned long total_queue = 0;
@@ -234,7 +236,7 @@ static void* thread_fun(void* data) {
   
   thread_data_t* thread_data = (thread_data_t*) data; 
 
-  auto main_fun = thread_main_simple;
+/*  auto main_fun = thread_main_simple;
   if (args.lock_type == "simple") {
     main_fun = thread_main_simple;
   } else if (args.lock_type == "tts") {
@@ -248,8 +250,93 @@ static void* thread_fun(void* data) {
   while (!thread_data->finish.load(std::memory_order_relaxed)) {
     thread_data->iterations++;
     main_fun(thread_data);
-//    thread_main_ticket(thread_data);
+  }*/
+
+  int P = args.parallel_work;
+  int C = args.critical_work;
+  int iterations = 0;
+  int queue = 0;
+  if (args.lock_type == "simple") {
+    int zero = 0;
+
+    while (!thread_data->finish.load(std::memory_order_relaxed)) {
+      iterations++;
+//      thread_main_simple(thread_data);
+      for (int i = 0; i < P; i++) {
+        NOP;
+      }
+
+      zero = 0;
+      while (!lock.compare_exchange_strong(zero, 1, std::memory_order_acq_rel)) {
+          zero = 0;
+      }
+
+      for (int i = 0; i < C; i++) {
+        NOP;
+      }
+
+      lock.store(0, std::memory_order_release);
+    }
+  } else if (args.lock_type == "tts") {
+    int current, start;
+    while (!thread_data->finish.load(std::memory_order_relaxed)) {
+      iterations++;
+//      thread_main_tts(thread_data);
+      for (int i = 0; i < P; i++) {
+        NOP;
+      }
+
+      start = lock.load();
+      current = start;
+      while (current & 1 == 1) {
+        current = lock.load(std::memory_order_relaxed);
+      }
+
+      while (!lock.compare_exchange_strong(current, current + 1, std::memory_order_acq_rel)) {
+        do {
+          current = lock.load(std::memory_order_relaxed);
+        } while (current & 1 == 1);
+      }
+      
+      queue += current / 2 - start / 2 + 1;
+
+      for (int i = 0; i < C; i++) {
+        NOP;
+      }
+
+      lock.store(current + 2, std::memory_order_release);
+    }
+  } else if (args.lock_type == "ticket") {
+    int current, start;
+    while (!thread_data->finish.load(std::memory_order_relaxed)) {
+      iterations++;
+//      thread_main_ticket(thread_data);
+      for (int i = 0; i < P; i++) {
+        NOP;
+      }
+
+      start = ticket.fetch_add(1);
+      current = lock.load(std::memory_order_relaxed);
+      queue += start - current + 1;
+
+      do {
+      } while (lock.load(std::memory_order_relaxed) != start);
+      std::atomic_thread_fence(std::memory_order_acquire);
+
+      for (int i = 0; i < C; i++) {
+        NOP;
+      }
+
+      lock.store(start + 1, std::memory_order_release);
+    }
+  } else {
+    std::cerr << "Wrong lock parameter" << std::endl;
   }
+
+  thread_data->iterations = iterations;
+  thread_data->queue = queue;
+
+  std::atomic_thread_fence(std::memory_order_release);
   
   return NULL;
 }
@@ -295,6 +382,24 @@ static void thread_main_tts(thread_data_t* data) {
   }
 
   lock.store(current + 2, std::memory_order_release);
+  
+/*  for (int i = 0; i < args.parallel_work; i++) {
+    NOP;
+  }
+
+  int zero = 0;
+  do {
+//    zero = 0;
+    do {
+      zero = lock.load(std::memory_order_relaxed);
+    } while (zero == 1);
+  } while (!lock.compare_exchange_strong(zero, 1, std::memory_order_acq_rel));
+
+  for (int i = 0; i < args.critical_work; i++) {
+    NOP;
+  }
+
+  lock.store(0, std::memory_order_release);*/
 }
 
 static void thread_main_ticket(thread_data_t* data) {
@@ -307,7 +412,9 @@ static void thread_main_ticket(thread_data_t* data) {
   data->queue += start - current + 1;
 
   do {
-  } while (lock.load(std::memory_order_acquire) != start);
+  } while (lock.load(std::memory_order_relaxed) != start);
+
+  std::atomic_thread_fence(std::memory_order_acquire);
 
   for (int i = 0; i < args.critical_work; i++) {
     NOP;
