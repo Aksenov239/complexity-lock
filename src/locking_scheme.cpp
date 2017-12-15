@@ -286,7 +286,7 @@ static void* thread_fun(void* data) {
         NOP;
       }
 
-      start = lock.load();
+      start = lock.load(std::memory_order_relaxed);
       current = start;
       while (current & 1 == 1) {
         current = lock.load(std::memory_order_relaxed);
@@ -315,7 +315,7 @@ static void* thread_fun(void* data) {
         NOP;
       }
 
-      start = ticket.fetch_add(1);
+      start = ticket.fetch_add(1, std::memory_order_relaxed);
       current = lock.load(std::memory_order_relaxed);
       queue += start - current + 1;
 
