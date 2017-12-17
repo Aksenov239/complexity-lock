@@ -79,11 +79,11 @@ static cmd_line_args_t args;
 
 int p1[128];
 
-int hand_lock = 0;
+volatile int hand_lock = 0;
 
 int p2[128];
 
-int hand_ticket = 0;
+volatile int hand_ticket = 0;
 
 unsigned TIME;
 
@@ -230,7 +230,6 @@ unsigned socket_pin(unsigned tid) {
 
 static void* thread_fun(void* data) {
   if (args.pin_type == "greedy") {
-//      std::cerr << "greedy\n";
       pin(((thread_data_t *)data)->tid, greedy_pin(((thread_data_t *) data)->tid));
   } else if (args.pin_type == "socket") {
       pin(((thread_data_t *)data)->tid, socket_pin(((thread_data_t *) data)->tid));
@@ -261,8 +260,8 @@ static void* thread_fun(void* data) {
         NOP;
       }
 
-      hand_lock = 0;
       std::atomic_thread_fence(std::memory_order_release);
+      hand_lock = 0;
     }
   } else if (args.lock_type == "tts") {
     int current, start;
@@ -275,7 +274,7 @@ static void* thread_fun(void* data) {
       start = hand_lock;
       current = start;
       while (current & 1 == 1) {
-        std::atomic_thread_fence(std::memory_order_seq_cst);
+//        std::atomic_thread_fence(std::memory_order_seq_cst);
 //        std::atomic_thread_fence(std::memory_order_acquire);
 //        __asm__ __volatile__("":::"memory");
         current = hand_lock;
@@ -284,20 +283,21 @@ static void* thread_fun(void* data) {
       while (__sync_val_compare_and_swap(&hand_lock, current, current + 1) != current) {
         do {
           current = hand_lock;
-          std::atomic_thread_fence(std::memory_order_seq_cst);
+//          std::atomic_thread_fence(std::memory_order_seq_cst);
 //          std::atomic_thread_fence(std::memory_order_acquire);
 //          __asm__ __volatile__("":::"memory");
         } while (current & 1 == 1);
       }
+      std::atomic_thread_fence(std::memory_order_acquire);
 
       queue += current / 2 - start / 2 + 1;
 
       for (int i = 0; i < C; i++) {
         NOP;
       }
-                               	
+                   
+      std::atomic_thread_fence(std::memory_order_release);      	
       hand_lock = current + 2;
-      std::atomic_thread_fence(std::memory_order_release);
     }
   } else if (args.lock_type == "ticket") {
     int current, start;
@@ -312,17 +312,18 @@ static void* thread_fun(void* data) {
       queue += start - current + 1;
 
       do {
-        std::atomic_thread_fence(std::memory_order_acquire);
+//        std::atomic_thread_fence(std::memory_order_acquire);
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
 //        __asm__ __volatile__("":::"memory");
       } while (hand_lock != start);
+      std::atomic_thread_fence(std::memory_order_acquire);
 
       for (int i = 0; i < C; i++) {
         NOP;
       }
 
-      hand_lock = start + 1;
       std::atomic_thread_fence(std::memory_order_release);
+      hand_lock = start + 1;
     }
   } else {
     std::cerr << "Wrong lock parameter" << std::endl;
