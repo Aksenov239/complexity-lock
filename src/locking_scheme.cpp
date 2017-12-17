@@ -12,6 +12,7 @@
 #include <math.h>
 #include <sys/syscall.h>
 #include <atomic>
+#include <immintrin.h>
 
 #include "common/cache_aligned_alloc.h"
 #include "common/my_time.h"
