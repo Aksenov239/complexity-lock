@@ -12,6 +12,7 @@
 #include <math.h>
 #include <sys/syscall.h>
 #include <atomic>
+#include <immintrin.h>
 
 #include "common/cache_aligned_alloc.h"
 #include "common/my_time.h"
@@ -79,11 +80,11 @@ static cmd_line_args_t args;
 
 int p1[128];
 
-volatile int hand_lock = 0;
+int hand_lock = 0;
 
 int p2[128];
 
-volatile int hand_ticket = 0;
+int hand_ticket = 0;
 
 unsigned TIME;
 
@@ -274,6 +275,7 @@ static void* thread_fun(void* data) {
       start = hand_lock;
       current = start;
       while (current & 1 == 1) {
+//        _mm_pause();
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
 //        std::atomic_thread_fence(std::memory_order_acquire);
 //        __asm__ __volatile__("":::"memory");
@@ -282,10 +284,11 @@ static void* thread_fun(void* data) {
 
       while (__sync_val_compare_and_swap(&hand_lock, current, current + 1) != current) {
         do {
-          current = hand_lock;
+//          _mm_pause();
 //          std::atomic_thread_fence(std::memory_order_seq_cst);
 //          std::atomic_thread_fence(std::memory_order_acquire);
 //          __asm__ __volatile__("":::"memory");
+          current = hand_lock;
         } while (current & 1 == 1);
       }
 //      std::atomic_thread_fence(std::memory_order_acquire);
@@ -296,8 +299,9 @@ static void* thread_fun(void* data) {
         NOP;
       }
                    
-      std::atomic_thread_fence(std::memory_order_release);      	
+      std::atomic_thread_fence(std::memory_order_release);
       hand_lock = current + 2;
+//      std::atomic_thread_fence(std::memory_order_release);
     }
   } else if (args.lock_type == "ticket") {
     int current, start;
@@ -312,6 +316,7 @@ static void* thread_fun(void* data) {
       queue += start - current + 1;
 
       do {
+//        _mm_pause();
 //        std::atomic_thread_fence(std::memory_order_acquire);
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
 //        __asm__ __volatile__("":::"memory");
@@ -324,6 +329,7 @@ static void* thread_fun(void* data) {
 
       std::atomic_thread_fence(std::memory_order_release);
       hand_lock = start + 1;
+//      std::atomic_thread_fence(std::memory_order_release);
     }
   } else {
     std::cerr << "Wrong lock parameter" << std::endl;
