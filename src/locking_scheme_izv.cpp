@@ -288,7 +288,7 @@ static void* thread_fun(void* data) {
 //          __asm__ __volatile__("":::"memory");
         } while (current & 1 == 1);
       }
-      std::atomic_thread_fence(std::memory_order_acquire);
+//      std::atomic_thread_fence(std::memory_order_acquire);
 
       queue += current / 2 - start / 2 + 1;
 
