@@ -261,8 +261,10 @@ static void* thread_fun(void* data) {
         NOP;
       }
 
-      std::atomic_thread_fence(std::memory_order_release);
+//      std::atomic_thread_fence(std::memory_order_release);
+      ASM("" : : : "memory");
       hand_lock = 0;
+//      membarstoreload();
     }
   } else if (args.lock_type == "tts") {
     int current, start;
@@ -275,19 +277,11 @@ static void* thread_fun(void* data) {
       start = hand_lock;
       current = start;
       while (current & 1 == 1) {
-//        _mm_pause();
-//        std::atomic_thread_fence(std::memory_order_seq_cst);
-//        std::atomic_thread_fence(std::memory_order_acquire);
-//        __asm__ __volatile__("":::"memory");
         current = hand_lock;
       }
 
       while (__sync_val_compare_and_swap(&hand_lock, current, current + 1) != current) {
         do {
-//          _mm_pause();
-//          std::atomic_thread_fence(std::memory_order_seq_cst);
-//          std::atomic_thread_fence(std::memory_order_acquire);
-//          __asm__ __volatile__("":::"memory");
           current = hand_lock;
         } while (current & 1 == 1);
       }
@@ -299,8 +293,12 @@ static void* thread_fun(void* data) {
         NOP;
       }
                    
-      std::atomic_thread_fence(std::memory_order_release);
+//      std::atomic_thread_fence(std::memory_order_release);
+//      membarstoreload();
+      ASM("" : : : "memory");
       hand_lock = current + 2;
+//      membarstoreload();
+//      ASM("mfence" ::: "memory");
 //      std::atomic_thread_fence(std::memory_order_release);
     }
   } else if (args.lock_type == "ticket") {
@@ -316,19 +314,20 @@ static void* thread_fun(void* data) {
       queue += start - current + 1;
 
       do {
-//        _mm_pause();
-//        std::atomic_thread_fence(std::memory_order_acquire);
-//        std::atomic_thread_fence(std::memory_order_seq_cst);
-//        __asm__ __volatile__("":::"memory");
       } while (hand_lock != start);
-      std::atomic_thread_fence(std::memory_order_acquire);
+//      std::atomic_thread_fence(std::memory_order_acquire);
+//      membarstoreload();
+      ASM("" : : : "memory");
 
       for (int i = 0; i < C; i++) {
         NOP;
       }
 
-      std::atomic_thread_fence(std::memory_order_release);
+//      std::atomic_thread_fence(std::memory_order_release);
+//      membarstoreload();
+      ASM("" : : : "memory");
       hand_lock = start + 1;
+//      membarstoreload();
 //      std::atomic_thread_fence(std::memory_order_release);
     }
   } else {
