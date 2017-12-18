@@ -58,7 +58,7 @@ struct thread_data_t {
 
   unsigned total;
 
-  std::atomic<bool> finish;
+  bool hand_finish;
 };
 
 static void print_usage();
@@ -78,19 +78,22 @@ unsigned uneven_pin(unsigned tid);
 
 static cmd_line_args_t args;
 
-std::atomic<int> lock;
-std::atomic<int> ticket;
+int p1[128];
+
+int hand_lock = 0;
+
+int p2[128];
+
+int hand_ticket = 0;
+
 unsigned TIME;
-int ZERO;
 
 int main(int argc, char **argv) {
   args.pin_type = "greedy";
 
-  ZERO = 0;
+  hand_lock = 0;
 
-  lock = 0;
-
-  ticket = 0;
+  hand_ticket = 0;
 
   parse_cmd_line_args(args, argc, argv);
 
@@ -104,7 +107,7 @@ int main(int argc, char **argv) {
     td->queue = 0;
     td->iterations = 0;
 
-    td->finish = false;
+    td->hand_finish = false;
 
     thread_data[i] = td;
   }
@@ -121,8 +124,10 @@ int main(int argc, char **argv) {
   sleep_ms(TIME);
 
   for (unsigned i = 0; i < args.threads_count; i++) {
-    thread_data[i]->finish.store(true, std::memory_order_relaxed);
+    thread_data[i]->hand_finish = true;
   }
+
+  std::atomic_thread_fence(std::memory_order_seq_cst);
 
   for (unsigned i = 0; i < args.threads_count; i++) {
     pthread_join(threads[i], NULL);
@@ -226,7 +231,6 @@ unsigned socket_pin(unsigned tid) {
 
 static void* thread_fun(void* data) {
   if (args.pin_type == "greedy") {
-//      std::cerr << "greedy\n";
       pin(((thread_data_t *)data)->tid, greedy_pin(((thread_data_t *) data)->tid));
   } else if (args.pin_type == "socket") {
       pin(((thread_data_t *)data)->tid, socket_pin(((thread_data_t *) data)->tid));
@@ -237,22 +241,6 @@ static void* thread_fun(void* data) {
   
   thread_data_t* thread_data = (thread_data_t*) data; 
 
-/*  auto main_fun = thread_main_simple;
-  if (args.lock_type == "simple") {
-    main_fun = thread_main_simple;
-  } else if (args.lock_type == "tts") {
-    main_fun = thread_main_tts;
-  } else if (args.lock_type == "ticket") {
-    main_fun = thread_main_ticket;
-  } else {
-    std::cerr << "Wrong lock parameter" << std::endl;
-  }
-
-  while (!thread_data->finish.load(std::memory_order_relaxed)) {
-    thread_data->iterations++;
-    main_fun(thread_data);
-  }*/
-
   int P = args.parallel_work;
   int C = args.critical_work;
   int iterations = 0;
@@ -260,75 +248,87 @@ static void* thread_fun(void* data) {
   if (args.lock_type == "simple") {
     int zero = 0;
 
-    while (!thread_data->finish.load(std::memory_order_relaxed)) {
+    while (!thread_data->hand_finish) {
       iterations++;
-//      thread_main_simple(thread_data);
       for (int i = 0; i < P; i++) {
         NOP;
       }
 
-      zero = 0;
-      while (!lock.compare_exchange_strong(zero, 1, std::memory_order_acq_rel)) {
-          zero = 0;
+      while (__sync_val_compare_and_swap(&hand_lock, 0, 1) != 0) {
       }
 
       for (int i = 0; i < C; i++) {
         NOP;
       }
 
-      lock.store(0, std::memory_order_release);
+//      std::atomic_thread_fence(std::memory_order_release);
+      ASM("" : : : "memory");
+      hand_lock = 0;
+//      membarstoreload();
     }
   } else if (args.lock_type == "tts") {
     int current, start;
-    while (!thread_data->finish.load(std::memory_order_relaxed)) {
+    while (!thread_data->hand_finish) {
       iterations++;
-//      thread_main_tts(thread_data);
       for (int i = 0; i < P; i++) {
         NOP;
       }
 
-      start = lock.load(std::memory_order_relaxed);
+      start = hand_lock;
       current = start;
       while (current & 1 == 1) {
-        current = lock.load(std::memory_order_relaxed);
+        current = hand_lock;
       }
 
-      while (!lock.compare_exchange_strong(current, current + 1, std::memory_order_acq_rel)) {
+      while (__sync_val_compare_and_swap(&hand_lock, current, current + 1) != current) {
         do {
-          current = lock.load(std::memory_order_relaxed);
+          current = hand_lock;
         } while (current & 1 == 1);
       }
-      
+//      std::atomic_thread_fence(std::memory_order_acquire);
+
       queue += current / 2 - start / 2 + 1;
 
       for (int i = 0; i < C; i++) {
         NOP;
       }
-
-      lock.store(current + 2, std::memory_order_release);
+                   
+//      std::atomic_thread_fence(std::memory_order_release);
+//      membarstoreload();
+      ASM("" : : : "memory");
+      hand_lock = current + 2;
+//      membarstoreload();
+//      ASM("mfence" ::: "memory");
+//      std::atomic_thread_fence(std::memory_order_release);
     }
   } else if (args.lock_type == "ticket") {
     int current, start;
-    while (!thread_data->finish.load(std::memory_order_relaxed)) {
+    while (!thread_data->hand_finish) {
       iterations++;
-//      thread_main_ticket(thread_data);
       for (int i = 0; i < P; i++) {
         NOP;
       }
 
-      start = ticket.fetch_add(1, std::memory_order_relaxed);
-      current = lock.load(std::memory_order_relaxed);
+      start = __sync_fetch_and_add(&hand_ticket, 1);
+      current = hand_lock;
       queue += start - current + 1;
 
       do {
-      } while (lock.load(std::memory_order_relaxed) != start);
-      std::atomic_thread_fence(std::memory_order_acquire);
+      } while (hand_lock != start);
+//      std::atomic_thread_fence(std::memory_order_acquire);
+//      membarstoreload();
+      ASM("" : : : "memory");
 
       for (int i = 0; i < C; i++) {
         NOP;
       }
 
-      lock.store(start + 1, std::memory_order_release);
+//      std::atomic_thread_fence(std::memory_order_release);
+//      membarstoreload();
+      ASM("" : : : "memory");
+      hand_lock = start + 1;
+//      membarstoreload();
+//      std::atomic_thread_fence(std::memory_order_release);
     }
   } else {
     std::cerr << "Wrong lock parameter" << std::endl;
@@ -340,86 +340,4 @@ static void* thread_fun(void* data) {
   std::atomic_thread_fence(std::memory_order_release);
   
   return NULL;
-}
-
-static void thread_main_simple(thread_data_t* data) {
-  for (int i = 0; i < args.parallel_work; i++) {
-    NOP;
-  }
-
-  int zero = 0;
-  while (!lock.compare_exchange_strong(zero, 1, std::memory_order_acq_rel)) {
-      zero = 0;
-  }
-
-  for (int i = 0; i < args.critical_work; i++) {
-    NOP;
-  }
-
-  lock.store(0, std::memory_order_release);
-}
-
-static void thread_main_tts(thread_data_t* data) {
-  for (int i = 0; i < args.parallel_work; i++) {
-    NOP;
-  }
-
-  int start = lock.load(std::memory_order_relaxed);
-  int current = start;
-  while (current & 1 == 1) {
-    current = lock.load(std::memory_order_relaxed);
-  }
-
-  while (!lock.compare_exchange_strong(current, current + 1, std::memory_order_acq_rel)) {
-    do {
-      current = lock.load(std::memory_order_relaxed);
-    } while (current & 1 == 1);
-  }
-  
-  data->queue += current / 2 - start / 2 + 1;
-
-  for (int i = 0; i < args.critical_work; i++) {
-    NOP;
-  }
-
-  lock.store(current + 2, std::memory_order_release);
-  
-/*  for (int i = 0; i < args.parallel_work; i++) {
-    NOP;
-  }
-
-  int zero = 0;
-  do {
-//    zero = 0;
-    do {
-      zero = lock.load(std::memory_order_relaxed);
-    } while (zero == 1);
-  } while (!lock.compare_exchange_strong(zero, 1, std::memory_order_acq_rel));
-
-  for (int i = 0; i < args.critical_work; i++) {
-    NOP;
-  }
-
-  lock.store(0, std::memory_order_release);*/
-}
-
-static void thread_main_ticket(thread_data_t* data) {
-  for (int i = 0; i < args.parallel_work; i++) {
-    NOP;
-  }
-
-  int start = ticket.fetch_add(1, std::memory_order_relaxed);
-  int current = lock.load(std::memory_order_relaxed);
-  data->queue += start - current + 1;
-
-  do {
-  } while (lock.load(std::memory_order_relaxed) != start);
-
-  std::atomic_thread_fence(std::memory_order_acquire);
-
-  for (int i = 0; i < args.critical_work; i++) {
-    NOP;
-  }
-
-  lock.store(start + 1, std::memory_order_release);
 }

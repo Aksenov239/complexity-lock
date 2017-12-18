@@ -2,13 +2,13 @@ import os
 import sys
 from statistics import mean, stdev
 
-keys = ["queue"]
+keys = ["queue", "throughput"]
 
 src = "./src/locking_scheme"
-lock = "ticket"
+lock = "simple"
 duration = 2000
 points = [500, 1000, 5000, 10000, 50000, 100000]
-parallel_factors = [0.1, 0.5, 1, 2, 4, 10, 20, 30, 50, 80]
+parallel_factors = [0.1, 0.5, 1, 2, 4, 5, 10, 15, 20, 25, 30, 35, 40, 50]
 critical_factors = [1. / 80, 1. / 50, 1. / 30, 1. / 10, 1. / 4, 1. / 2, 1, 2]
 proc = [5, 10, 20, 30, 39]
 
@@ -49,35 +49,37 @@ def parse(filename):
         if good == None:
             continue
         value = ll.strip().split(":")[1].strip().split(" ")[0]
-        values[key].append(float(value))
+        values[good].append(float(value))
     return values
 
-def data_file(duration, t, proc, point, lock):
-    return "data/d{}/{}_{}_{}_{}.dat".format(duration, t, proc, point, lock)
+def data_file(duration, key, t, proc, point, lock):
+    return "data/d{}/{}/{}_{}_{}_{}.dat".format(duration, key, t, proc, point, lock)
 
-def data():
-    if not os.path.isdir("data/d{}".format(duration)):
-        os.makedirs("data/d{}".format(duration))
+def data(key):
+    if not os.path.isdir("data/d{}/{}".format(duration, key)):
+        os.makedirs("data/d{}/{}".format(duration, key))
 
     for p in proc:
         for first in points:
-            out = open(data_file(duration, "critical", p, first, lock), 'w')
+            out = open(data_file(duration, key, "critical", p, first, lock), 'w')
             for factor in parallel_factors:
                 critical = first
                 parallel = int(factor * first)
-                queue = parse(log_file(duration, p, critical, parallel, lock))["queue"]
-                out.write("{} {}\n".format(parallel, mean(queue)))
+                res = parse(log_file(duration, p, critical, parallel, lock))[key]
+                out.write("{} {}\n".format(parallel, mean(res)))
             out.close()
 
-            out = open(data_file(duration, "parallel", p, first, lock), 'w')
+            out = open(data_file(duration, key, "parallel", p, first, lock), 'w')
             for factor in critical_factors:
                 critical = int(factor * first)
                 parallel = first
-                queue = parse(log_file(duration, p, critical, parallel, lock))["queue"]
-                out.write("{} {}\n".format(critical, mean(queue)))
+                res = parse(log_file(duration, p, critical, parallel, lock))[key]
+                out.write("{} {}\n".format(critical, mean(res)))
             out.close()
+
+lock = sys.argv[2]
 
 if sys.argv[1] == "run":
     run()
 if sys.argv[1] == "data":
-    data()
+    data(sys.argv[3])
