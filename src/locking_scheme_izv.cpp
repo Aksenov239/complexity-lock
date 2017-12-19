@@ -23,6 +23,7 @@
 
 #define ASM __asm__ __volatile__
 #define membarstoreload() { ASM ("mfence;") ; }
+//#define membarstoreload() __asm__ __volatile__("lock; addl $0,0(%%rsp)":::"memory")
 
 #define __CAS64(m,c,s)                                          \
 ({ int64_t _x = (c);                                          \
@@ -39,7 +40,7 @@ _x; })
 #define CAS(m, c, s) __CAS64((m),(c),(s))
 
 //#define NOP __asm__ __volatile__("")
-#define NOP __asm__("")
+#define NOP __asm__ __volatile__("")
 
 struct cmd_line_args_t {
   unsigned time;
@@ -126,6 +127,7 @@ int main(int argc, char **argv) {
   for (unsigned i = 0; i < args.threads_count; i++) {
     thread_data[i]->hand_finish = true;
   }
+  membarstoreload();
 
   std::atomic_thread_fence(std::memory_order_seq_cst);
 
@@ -133,7 +135,7 @@ int main(int argc, char **argv) {
     pthread_join(threads[i], NULL);
   }
 
-  std::atomic_thread_fence(std::memory_order_acquire);
+  membarstoreload();
 
   unsigned long total_iterations = 0;
   unsigned long total_queue = 0;
@@ -261,10 +263,10 @@ static void* thread_fun(void* data) {
         NOP;
       }
 
-      std::atomic_thread_fence(std::memory_order_release);
+//      std::atomic_thread_fence(std::memory_order_release);
+      membarstoreload();
 //      ASM("" : : : "memory");
       hand_lock = 0;
-//      membarstoreload();
     }
   } else if (args.lock_type == "tts") {
     int current, start;
@@ -293,8 +295,8 @@ static void* thread_fun(void* data) {
         NOP;
       }
                    
-      std::atomic_thread_fence(std::memory_order_release);
-//      membarstoreload();
+//      std::atomic_thread_fence(std::memory_order_release);
+      membarstoreload();
 //      ASM("" : : : "memory");
       hand_lock = current + 2;
 //      membarstoreload();
@@ -315,16 +317,16 @@ static void* thread_fun(void* data) {
 
       do {
       } while (hand_lock != start);
-      std::atomic_thread_fence(std::memory_order_acquire);
-//      membarstoreload();
+//      std::atomic_thread_fence(std::memory_order_acquire);
+      membarstoreload();
 //      ASM("" : : : "memory");
 
       for (int i = 0; i < C; i++) {
         NOP;
       }
 
-      std::atomic_thread_fence(std::memory_order_release);
-//      membarstoreload();
+//      std::atomic_thread_fence(std::memory_order_release);
+      membarstoreload();
 //      ASM("" : : : "memory");
       hand_lock = start + 1;
 //      membarstoreload();
@@ -337,7 +339,7 @@ static void* thread_fun(void* data) {
   thread_data->iterations = iterations;
   thread_data->queue = queue;
 
-  std::atomic_thread_fence(std::memory_order_release);
+  membarstoreload();
   
   return NULL;
 }
