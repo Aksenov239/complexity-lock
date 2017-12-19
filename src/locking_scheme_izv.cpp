@@ -22,8 +22,8 @@
 #define PER_CORE 8
 
 #define ASM __asm__ __volatile__
-#define membarstoreload() { ASM ("mfence;") ; }
-//#define membarstoreload() __asm__ __volatile__("lock; addl $0,0(%%rsp)":::"memory")
+//#define membarstoreload() { ASM ("mfence;") ; }
+#define membarstoreload() __asm__ __volatile__("lock; addl $0,0(%%rsp)":::"memory")
 
 #define __CAS64(m,c,s)                                          \
 ({ int64_t _x = (c);                                          \
@@ -65,9 +65,10 @@ struct thread_data_t {
 static void print_usage();
 static void parse_cmd_line_args(cmd_line_args_t &args, int argc, char** argv);
 static void* thread_fun(void* data);
-static void thread_main_simple(thread_data_t* data);
-static void thread_main_tts(thread_data_t* data);
-static void thread_main_ticket(thread_data_t* data);
+
+void thread_main_simple(thread_data_t* data, int P, int C);
+void thread_main_tts(thread_data_t* data, int P, int C);
+void thread_main_ticket(thread_data_t* data, int P, int C);
 
 void pin(pid_t t, int cpu);
 
@@ -248,63 +249,91 @@ static void* thread_fun(void* data) {
   int iterations = 0;
   int queue = 0;
   if (args.lock_type == "simple") {
-    int zero = 0;
-
-    while (!thread_data->hand_finish) {
-      iterations++;
-      for (int i = 0; i < P; i++) {
-        NOP;
-      }
-
-      while (__sync_val_compare_and_swap(&hand_lock, 0, 1) != 0) {
-      }
-
-      for (int i = 0; i < C; i++) {
-        NOP;
-      }
-
-//      std::atomic_thread_fence(std::memory_order_release);
-      membarstoreload();
-//      ASM("" : : : "memory");
-      hand_lock = 0;
-    }
+    thread_main_simple(thread_data, P, C);
   } else if (args.lock_type == "tts") {
-    int current, start;
-    while (!thread_data->hand_finish) {
-      iterations++;
-      for (int i = 0; i < P; i++) {
-        NOP;
-      }
+    thread_main_tts(thread_data, P, C);
+  } else if (args.lock_type == "ticket") {
+    thread_main_ticket(thread_data, P, C);
+  } else {
+    std::cerr << "Wrong lock parameter" << std::endl;
+  }
 
-      start = hand_lock;
-      current = start;
-      while (current & 1 == 1) {
+  membarstoreload();
+  
+  return NULL;
+}
+
+void thread_main_simple(thread_data_t* thread_data, int P, int C) {
+  int zero = 0;
+  int iterations = 0;
+  while (!thread_data->hand_finish) {
+    iterations = 0;
+    for (int i = 0; i < P; i++) {
+      NOP;
+    }
+
+    while (__sync_val_compare_and_swap(&hand_lock, 0, 1) != 0) {
+    }
+
+    for (int i = 0; i < C; i++) {
+      NOP;
+    }
+
+    std::atomic_thread_fence(std::memory_order_release);
+//      membarstoreload();
+//      ASM("" : : : "memory");
+    hand_lock = 0;
+  }
+
+  thread_data->iterations = iterations;
+}
+
+void thread_main_tts(thread_data_t* thread_data, int P, int C) {
+  int current, start;
+  int iterations = 0;
+  int queue = 0;
+  while (!thread_data->hand_finish) {
+    iterations++;
+    for (int i = 0; i < P; i++) {
+      NOP;
+    }
+
+    start = hand_lock;
+    current = start;
+    while (current & 1 == 1) {
+      current = hand_lock;
+    }
+
+    while (__sync_val_compare_and_swap(&hand_lock, current, current + 1) != current) {
+      do {
         current = hand_lock;
-      }
-
-      while (__sync_val_compare_and_swap(&hand_lock, current, current + 1) != current) {
-        do {
-          current = hand_lock;
-        } while (current & 1 == 1);
-      }
+      } while (current & 1 == 1);
+    }
 //      std::atomic_thread_fence(std::memory_order_acquire);
 
-      queue += current / 2 - start / 2 + 1;
+    queue += current / 2 - start / 2 + 1;
 
-      for (int i = 0; i < C; i++) {
-        NOP;
-      }
-                   
-//      std::atomic_thread_fence(std::memory_order_release);
-      membarstoreload();
+    for (int i = 0; i < C; i++) {
+      NOP;
+    }
+                 
+    std::atomic_thread_fence(std::memory_order_release);
+//      membarstoreload();
 //      ASM("" : : : "memory");
-      hand_lock = current + 2;
+    hand_lock = current + 2;
 //      membarstoreload();
 //      ASM("mfence" ::: "memory");
 //      std::atomic_thread_fence(std::memory_order_release);
-    }
-  } else if (args.lock_type == "ticket") {
+  }
+
+  thread_data->iterations = iterations;
+  thread_data->queue = queue;
+}
+
+void thread_main_ticket(thread_data_t* thread_data, int P, int C) {
     int current, start;
+    int iterations = 0;
+    int queue = 0;
     while (!thread_data->hand_finish) {
       iterations++;
       for (int i = 0; i < P; i++) {
@@ -314,32 +343,24 @@ static void* thread_fun(void* data) {
       start = __sync_fetch_and_add(&hand_ticket, 1);
       current = hand_lock;
       queue += start - current + 1;
-
       do {
       } while (hand_lock != start);
-//      std::atomic_thread_fence(std::memory_order_acquire);
-      membarstoreload();
+      std::atomic_thread_fence(std::memory_order_acquire);
+//      membarstoreload();
 //      ASM("" : : : "memory");
 
       for (int i = 0; i < C; i++) {
         NOP;
       }
 
-//      std::atomic_thread_fence(std::memory_order_release);
-      membarstoreload();
+      std::atomic_thread_fence(std::memory_order_release);
+//      membarstoreload();
 //      ASM("" : : : "memory");
       hand_lock = start + 1;
 //      membarstoreload();
 //      std::atomic_thread_fence(std::memory_order_release);
     }
-  } else {
-    std::cerr << "Wrong lock parameter" << std::endl;
-  }
 
   thread_data->iterations = iterations;
   thread_data->queue = queue;
-
-  membarstoreload();
-  
-  return NULL;
 }

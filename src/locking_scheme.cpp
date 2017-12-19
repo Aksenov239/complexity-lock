@@ -65,9 +65,9 @@ static void print_usage();
 static void parse_cmd_line_args(cmd_line_args_t &args, int argc, char** argv);
 static void* thread_fun(void* data);
 
-static void thread_main_simple(thread_data_t* data, int P, int C);
-static void thread_main_tts(thread_data_t* data, int P, int C);
-static void thread_main_ticket(thread_data_t* data, int P, int C);
+void thread_main_simple(thread_data_t* data, int P, int C);
+void thread_main_tts(thread_data_t* data, int P, int C);
+void thread_main_ticket(thread_data_t* data, int P, int C);
 
 void pin(pid_t t, int cpu);
 
@@ -80,6 +80,7 @@ unsigned uneven_pin(unsigned tid);
 static cmd_line_args_t args;
 
 std::atomic<int> lock;
+int p1[128];
 std::atomic<int> ticket;
 
 unsigned TIME;
@@ -258,7 +259,7 @@ static void* thread_fun(void* data) {
   return NULL;
 }
 
-static void thread_main_simple(thread_data_t* data, int P, int C) {
+void thread_main_simple(thread_data_t* data, int P, int C) {
   int zero = 0;
   int iterations = 0;
   int queue = 0;
@@ -284,7 +285,7 @@ static void thread_main_simple(thread_data_t* data, int P, int C) {
   data->queue = queue;
 }
 
-static void thread_main_tts(thread_data_t* data, int P, int C) {
+void thread_main_tts(thread_data_t* data, int P, int C) {
   int current, start;
   int iterations = 0;
   int queue = 0;
@@ -317,7 +318,7 @@ static void thread_main_tts(thread_data_t* data, int P, int C) {
   data->queue = queue;
 }
 
-static void thread_main_ticket(thread_data_t* data, int P, int C) {
+void thread_main_ticket(thread_data_t* data, int P, int C) {
   int current, start;
   int iterations = 0;
   int queue = 0;
