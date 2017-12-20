@@ -267,7 +267,7 @@ void thread_main_simple(thread_data_t* thread_data, int P, int C) {
   int zero = 0;
   int iterations = 0;
   while (!thread_data->hand_finish) {
-    iterations = 0;
+    iterations++;
     for (int i = 0; i < P; i++) {
       NOP;
     }
